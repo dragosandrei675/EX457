@@ -1,0 +1,641 @@
+EX-457_To_improve
+
+1. ansible-navigator.yml
+
+$ ansible-navigator settings --effective --eei aap.lab.example.com/ee-supported-rhel8:latest --pp missing > sample.yml
+$ mv sample.yml ansible-navigator.yml
+$ cat ansible-navigator.yml
+---
+ansible-navigator:
+  ansible:
+    inventory:
+      entries:
+        - ./inventory
+
+1.1 Privilege escalation in inventory or group_vars/all/vars.yml
+
+ansible_user=student
+ansible_connection=ansible.netcommon.network_cli -> for Cisco
+ansible_connection=ansible.nectommon.netconf -> for Junos
+ansible_network_os=cisco.ios.ios
+ansible_network_os=junipernetworks.junos.junos
+ansible_become=yes
+ansible_become_method=enable
+ansible_ssh_private_key_file=~/.ssh/lab_rsa
+
+1.2 Git configuration
+
+$ git clone git@git.lab.example.com:student/snmp
+$ git checkbout -b exercise
+$ git config --global user.name 'Student user'
+$ git config --global user.email student@example.com
+$ git config --global push.default simple
+$ git config --global credentials.git@git.lab.example.com:student/snmp.username student
+$ git config --global credentials.helper cache --timeoute=7200
+$ git add .
+$ git status
+$ git commit -m
+$ git push -u origin exercise
+
+2. Common playbooks
+
+2.0 Netconf port on Junos
+
+---
+- name: Cofigure netconf
+  hosts: junos
+  gather_facts: false
+  tasks:
+    - name: Enable netconf port
+      vars:
+        ansible_connection: ansible.netcommon.network_cli
+      junipernetworks.junos.junos_netconf:
+        netconf_port: 830
+        state: present
+
+2.1 Banner motd playbook
+---
+- name: Confgure banners
+  hosts: ios
+  gather_facts: false
+  tasks:
+    - name: Configure banner on IOS devices
+      cisco.ios.ios_banner:
+        banner: motd / login
+        text: Managed by Ansible
+        state: present
+      notify: ios_save_cahanges
+
+  handlers:
+    - name: ios_save_cahgnes
+      cisco.ios.ios_config:
+        save_when: always
+
+2.2 Backup playbook for IOS and Junos
+
+---
+- name: Create backup
+  hosts:
+    - ios
+    - junos
+  gather_facts: false
+  tasks:
+    - name: Enable netconf port 830 on junos
+      when: ansible_network_os == "junipernetworks.junos.junos"
+      vars:
+        ansible_connection: ansible.netcommon.network_cli
+      junipernetworks.junos.junos_netconf:
+        netconf_port: 830
+        state: present
+
+    - name: Backup Junos 
+      junipernetworks.junos.junos_config:
+        backup: true
+        backup_options:
+          dir_path: /home/student/backups
+          filename: "{{ inventory_hostname }}.txt"
+
+    - name: Backup IOS
+      cisco.ios.ios_config:
+        backup: true
+        backup_options:
+          dir_path: /home/student/backups
+          filename: "{{ inventory_hostname }}.txt"
+
+2.3 Gather facts / ansible_network_resources and gather_network_resoruces
+
+---
+- name: Gather IOS facts
+  hosts: ios
+  gather_facts: false
+  tasks:
+    - name: Gather ios facts
+      cisco.ios.ios_facts:
+        gather_subset:
+          - all
+        gather_netwrok_resources:
+          - vlans
+          - interfaces
+
+    - name: disaply facts
+      ansbile.builtin.debug:
+        var: ansible_facts['net_vlans']
+
+    - name: Gather IOS facts
+      cisco.ios.ios_facts:
+        gather_subset:
+         - all
+      register: iosfacts
+
+    - name: Display a fact
+      ansible.builtin.debug:
+        var: iosfacts['ansible_facts']['ansible_net_hostname']
+
+-> Gather facts as Strcutred Data
+
+'gather_network_resources' parameter to gather facts as structured network resource data.
+- l3_interfaces
+- interfaces
+- vlans
+
+---
+- name: Gather facts as resource data
+  hosts: ios
+  gather_facts: false
+  tasks:
+    - name: Gather IOS facts
+      cisco.ios.ios_facts:
+        gather_network_resources:
+          - all
+
+    - name: Display facts
+      ansible.builtin.debug:
+        var: ansible_network_resources
+        
+    - name: Save facts to file
+      ansible.builtin.copy:
+        content: "{{ ansible_facts | to_nice_yaml }}"
+        dest: "facts/{{ inventory_hostname }}.txt"
+        mode: 0640
+
+2.4 Ping playbook 
+
+---
+- name: Ping Cisco node
+  hosts: ios
+  gather_facts: false
+  tasks:
+    - name: Ping cisco
+      cisco.ios.ios_ping:
+        dest: "{{ inventory_hostname }}"
+        count: 5
+
+2.5 Command playbooks
+
+---
+- name: Run commands on ios or junos
+  hosts: ios
+  gather_facts: false
+  tasks:
+    - name: Check DNS configuration
+      cisco.ios.ios_command:
+        commands:
+          - show configuration system name-server
+          - show configuration system version
+      regsiter: commands
+
+    - name: Disaply commands
+      ansible.builtin.debug:
+        var: commands['stdout_lines'][0]
+
+2.6 Configure DNS playbooks
+
+---
+- name: Configure DNS
+  hosts: ios,junos
+  gather_facts: false
+  tasks:
+    - name: Configure DNS settings
+      cisco.ios.ios_system:
+        name_server: 172.25.250.220
+        domain_search:
+          - lab.example.com
+          - example.com
+      notify: ios_save_changes
+
+   handlers:
+     - name: ios_save_cahgnes
+       cisco.ios.ios_config:
+         save_when: always
+
+2.7 Configure hostname
+
+---
+- name: Configure hostname for ios
+  hosts: ios
+  gather_facts: false
+  vars:
+    router_hostname: router1
+  tasks:
+    - name: Set {{ router_hostname }}
+      cisco.ios.ios_hostname:
+        config:
+          hostname: "{{ router_hostname }}"
+       state: merged
+
+2.8 Configure snmp using variables
+
+$ cat group_vars/ios/snmp.yml
+
+---
+snmp_state: merged
+snmp_location: 'Raleigh, NC'
+snmp_contact: 'Network Engineering | neteng@company.com'
+snmp_communities:
+  - name: rocommunity2n4g!
+    ro: true
+  - name: rwcommunityd7g$v
+    rw: true
+
+---
+- name: Configure ios snmp
+  hosts: junos
+  gather_facts: false
+  tasks:
+    - name: Configure ios snmp
+      cisco.ios.ios_snmp_server:
+        state: "{{ snmp_state }}"
+        config:
+          localtion: "{{ snmp_location }}"
+          contact: "{{ snmp_contact }}"
+          communitites: "{{ snmp_communities }}"
+
+
+2.9 Simple Loop playbooks
+
+---
+- name: Ping hosts from IOS managed nodes
+  hosts: ios
+  gather_facts: false
+  vars:
+    host_list:
+      - hosta
+      - hostb
+  tasks:
+    - name: Ping hosts
+      cisco.ios.ios_ping
+        dest: "{{ item }}"
+        count: 5
+      loop: "{{ host_list }}"
+      register: ping_result
+
+    - name: show ping_results round-trip times
+      ansible.builtin.debug:
+        vat: ping_result | map(attribute='rrt')
+
+
+2.10 Complex Loop playbooks
+
+$ cat group_vars/ios/interfaces.yml
+---
+interfaces:
+  iosxe1.lab.example.com:
+    - name: Loopback0
+      description: Managed by Ansible
+      enabled: true
+      ipv4: "10.10.10.10/32"
+
+    - name: GigabitEthernet2
+      description: Managed by Ansible
+      enabled: true
+      ipv4: "172.25.150.20/24"
+
+  iosxe2.lab.example.com:
+    - name: Loopback0
+      description: Managed by Ansible
+      enabled: true
+      ipv4: "10.10.20.10/32"
+
+    - name: GigabitEthernet2
+      description: Managed by Ansible
+      enabled: true
+      ipv4: "172.25.150.21/24"
+
+---
+- name: Configure Cisco IOS interfaces
+  hosts: ios
+  gather_facts: false
+  tasks:
+    - name: Gather interfaces facts (pre)
+      ciso.ios.ios_facts:
+        gather_subset:
+          - interfaces
+
+    - name: Show ansible_facts['net_interfaces']
+      ansible.builtin.debug:
+        var: ansible_facts['net_interfaces']
+
+    - name: Configure basic interfaces
+      when:
+        - interfaces is defined
+        - interfaces[ inventory_hostname ] is defined
+      cisco.ios.ios_interfaces
+        config:
+          - name: "{{ item['name'] }}"
+            description: "{{ item['description'] | default('omit') }}"
+            enabled: "{{ item['enabled'] | default(false) }}"
+        state: merges
+      loop: 
+        - "{{ interfaces[ inventory_hostname ] }}"
+
+    - name: Configure L3 interfaces infomration
+      when:
+        - interfaces is defined
+        - interfaces[ inventory_hostname ] is defined
+        - item['ipv4'] is defined
+      cisco.ios.ios_l3_interfaces:
+        config:
+          - name: "{{ item['name'] }}"
+            ipv4:
+              - address: "{{ item['ipv4'] }}"
+        state: merged
+      loop: "{{ interfaces[inventory_hostname] }}"
+
+
+2.11 ntp playbook using block
+
+---
+- name: Configure ntp
+  hosts:
+  tasks:
+    - name: Reconfigure Juniper managed nodes
+      block:
+        - name: Configure NTP on Juniper Junos managed nodes
+          junipernetworks.junos.junos_ntp_global:
+            config:
+              servers:
+                - server: "{{ ntp_server_1 }}"
+                - server: "{[ ntp_server_2 }}"
+            state: merged
+
+        - name: Verify prevoius ntp configureation no longer exist
+          junipernetworks.junos.junos_command:
+            commands:
+              - show configuration system ntp
+          register: ntp_servers
+          failed_when: >
+            ('server 172.25.23.240;' in ntp_servers['stdout_lines'][0])
+            or
+            ('server 172.25.23.230;' in ntp_servers['stdout_lines'][0])
+          when:
+            - ansible_network_os == "junipernetworks.junos.junos"
+
+      rescue:
+        - name: Remvoe all existing configuration
+          junipernetworks.junos.junos_ntp_global
+            config:
+            state: deleted
+
+        - name: Restore old ntp config
+          junipernetworks.junos.junos_config:
+            update: replace
+            src: "{{ inventory_hostname }}.txt"
+
+      always:
+        - name: Verify NTP configuration
+          junipernetworks.junos.junos.command:
+            commands:
+              - show configuration system ntp
+          register: junos_ntp
+
+        - name: Disaply NTP configuration
+          ansible.builtin.debug:
+            var: junos_ntp['stdout_lines'][0]
+      when: ansible_network_os == "junipernetworks.junos.junos"
+
+2.11 Import / Include plabooks, tasks, roles, vars
+
+---
+- name: Import / include
+  hosts:
+    - ios
+    - junos
+  gather_facts: false
+  tasks:
+    - name: Import IOS VLANs playbook
+      ansible.builint.import_playbook: ios_vlans.yml
+
+    - name: Import Juniper Junos VLANs tasks
+      ansible.builtin.import_tasks: junos_vlan.yml
+
+    - name: Using loop only work with include
+      ansible.builtin.include_tasks: ios_add_users.yml
+      loop: "{{ expected_users }}"
+
+2.12 pre-tasks, roles, taks, post-tasks
+
+---
+- name: Play to illustarte order of execution
+  hosts: all
+  gather_facts: false
+  serial
+    - 1%
+    - 20%
+    - 100%
+  max_fail_percentage: 0
+  pre_tasks:
+    - name: This task run fist
+      ansible.builtin.debug:
+        msg: This task is in pre_tasks
+      notify: my handlers
+      chagned_when: true
+
+  roles:
+    - role: role1
+
+  tasks:
+    - name: This Task run after role
+      ansible.builtin.debug:
+        msg: This task is in tasks
+      notify: handlers
+
+  pre_tasks:
+    - name: .....
+
+  handlers:
+    - name:....
+      listen: my hanlders
+
+
+3.0  Roles
+
+$ mkdir roles
+$ ansible-galaxy init my_role
+$ vi roles/requirements.yml
+---
+- src: https://git@git.lab.example...
+  scm: git
+  version: main
+
+- src: file:///opt/local/roles/myrole.tar
+  name: myrole
+
+$ ansible-galaxy role install -r roles/requirements.yml -p roles
+
+3.1 Collections
+
+$ ansible-navigator collections -m interactive
+$ ansible-galaxy collection list
+
+$ cat ansible.cfg
+[defaults]
+inventory=./inventory
+remote_user=devops
+forks=15
+gathering=smart
+collections_path=./collections:/usr/share/ansible/collections
+roles_path=./roles:/usr/share/ansible/roles
+callbacks_enabled=ansible.posix.timer, ansible.posix.profile_tasks, ansible.posix.profile_roles
+
+[inventory]
+enable_plugins=auto, ini, yaml
+
+[galaxy]
+server_list = automation_hub, galaxy
+
+$ cat collections/requirements.yml
+
+---
+collections:
+  - name: network.ospf
+
+  - name: network.base
+    version: 2.0.0
+
+$ ansible-galaxy collection install -r collections/requirements.yml -p collections
+
+
+3.2 Using Collections in playbooks
+
+---
+- name: Deploy OSPF Configuration
+  hosts: ios
+  gather_facts: false
+  tasks:
+  - name: OSPF Manager (deploy)
+    ansible.builtin.include_role:
+      name: network.ospf.run
+    vars:
+      actions:
+        - name: deploy
+      inventory_directory: ./
+
+4.0 Automating Network Administration Tasks
+
+4.1 Collect facts
+
+- name: Collect facts
+  cisco.ios.ios_facts:
+    gather_subset:
+      - all
+
+- name: Disaply ansible_facts['net_config']
+  ansible.builtin.debug:
+    var: ansible_facts['net_config'] |  regex_findall('^snmp.*$', multiline=true)
+
+- name: Display configuration as a list
+  vars:
+    separator: "\n"
+  ansible.builtin.debug:
+    var: ansible_facts['net_config'] | split(separator)
+
+
+4.2 Set_fact playbook
+
+- name: Set snmp_config_lines
+  ansible.builtin.set_fact:
+    snmp_config_lines: >-
+      {{ ansible_facts['net_config'] |
+      regex_findall('^snmp.*$', multiline=true) }}
+
+- name: Display snmp_config_lines
+  when: snmp_config_lines | length > 0
+  ansible.builtin.debug:
+    var: snmp_config_lines
+
+
+4.3 Slrup playbook to process files
+
+- name: Slrup backup file
+  ansible.builtin.slrup:
+    src: /backups/junos1.lab.example.com.json
+  regsiter: slurped_file
+
+- name: Disaply decoded slurped_file['content']
+  ansible.builtin.debug:
+    var: slurped_file['content'] | b64decde | from_json
+
+- name: Set json fact
+  ansible.builtin.set_fact:
+    json_content: >
+      {{ slurped_file['content'] | b64decode | from_json }}
+
+4.4 Save configuration using 'resource_manager' role form network.base collection to generate YAML file
+network.base.resource_manager
+
+- name: Network Resource Manager
+  ansible.builtin.include_role:
+    name: network.base.resource_manager
+  vars:
+    action: persist
+    inventory_direcory: ./
+
+- action: persist expects to find an inventory file named inventory.yml
+
+$ ansible-navigator inventory -i invenotry --list --yaml > inventory.yml
+
+
+5.0 Jinja2 Tempaltes
+
+{% for server in groups['all'] %}
+{{ hostvars[server]['ansible_facts']['hostname'] }} {{ hostvars[server]['ansible_facts']['default_ipv4']['address'] }}
+{% endfor %}
+
+{# loop through each interface #}
+{% for interface in interfaces %}
+interface {{ INTEFACE['name'] }}
+  description {{ INTERFACE['name'] }} Interface
+  ip address {{ INTERFACE['address'] }}
+{% endfor %}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
