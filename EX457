@@ -1,0 +1,1808 @@
+EX-457
+
+1.0 Introducing Red Hat Ansible Automation Platform
+
+1.0.1 Preparing for Ansible Development
+
+$ dnf install ansible-core 
+$ dnf install ansible-navigator
+$ dnf install podman
+$ dnf install ansible-lint
+$ podman login -u admin -p redhat hub.lab.example.com
+$ podman pull hub.lab.example.com/ee-supported-rhel8:latest
+
+1.0.2 Reading Documentation
+
+$ ansible-navigator doc cisco.ios.ios_hostname -m stdout
+
+2.0 Implementing an Ansible Playbook
+
+2.0.1 Building a Static Ansible Inventory
+
+$ cat inventory
+
+[cisco]
+iosxe1.lab.example.com
+iosxe2.lab.example.com
+
+[juniper]
+junos.lab.example.com
+
+[arista]
+arista.lab.example.com
+
+[nxos]
+nxos.lab.example.com ansible_host=10.80.1.251
+
+[routes:children]
+cisco
+juniper
+arista
+
+$ cat inventory.yml
+
+all:
+  children:
+    hosts:
+      cisco:
+        hosts:
+          iosxe1.lab.example.com:
+          iosxe2.lab.example.com:
+      juniper:
+        hosts:
+          junos.lab.example.com
+      arista:
+        hosts:
+          arista.lab.example.com
+      nxos:
+        hosts:
+          nxos.lab.example.com: ansible_host=10.80.1.251
+
+
+2.0.2 Using Automation Content Navigator to Browse the Ansible Inventory
+
+$ ansible-navigator inventory -i inventory --list / --graph -m stdout
+
+- Convert ini inventory in yaml inventory
+
+$ ansible-navigator inventory -i inventor --list --yaml > inventory.yml
+
+
+2.1 Configuring Automation Content Navigator
+
+
+$ podman login -u admin -p redhat hub.lab.example.com
+
+$ ansible-navigator settings --effective --eei hub.lab.example.com/ee-supported-rhel8:latest --pp missing > sample.yml
+
+$ mv -v sample.yml ansible-navigator.yml
+
+- under enbabled: true
+        environment-variables:
+          set:
+            ANSIBLE_CONFIG: /home/studnet/ansible.cfg
+            ANSILBE_PIPELINENING: true
+
+---
+ansible-navigator:
+  ansible:
+    inventory:
+      entries:
+        - ./inventory
+
+-> disable playbook artifacts
+
+2.2 Writing and Running Playbooks
+
+-> List
+
+- show version
+- show interfaces
+
+-> Dictionar
+
+port: 22
+delay: 60
+timeout: 600
+
+---
+- name: Network automation example
+  hosts: ios
+  gather_facts: false
+  tasks:
+    - name: Configure a Cisco IOS device
+      cisco.ios.ios_config:
+        lines:
+          - service timestamps debug datetime msec
+          - service timestamps log datetime msec localtime
+          - sevice passwor-encryption
+        save_when: changed
+        match: line
+        replace: line
+
+
+2.2.1 Network Automation Modules
+
+
+-> Ansible facts are variables discovered by Ansible using ansible.builtin.setup and gathering
+
+ansible.builtin.setup:
+gather_facts: true
+
+1. Facts modules use and *_facts suffix 
+
+- cisco.ios.ios_facts
+- cisco.nxos.nxos_facts
+- junipernetwork.junos.junos_facts
+- arista.eos.eos_facts
+
+! Important
+
+- When creating playbooks for network automation, always specify gather_facts: false (or gather_facts: no) and use the vendor-specific *_facts modules if the managed node OS supports a specific _facts module.
+
+2. Command modules: 
+
+- Allow to send command to network devices
+- Command modules use an _command suffix.
+
+- cisco.ios.ios_command
+- cisco.nxos.nxos_command
+- junipernetworks.junos.junos_command
+- arista.eos.eos_command
+
+3. Configuration modules change the running config. If you want to be persisten then you must use 'save_when:'
+
+-> Cisco modules uses 'save_when:' by default is never
+
+-> Arista modules includes 'save_when: ' by default never
+
+-> junipernetworks.junos.junos_config  users 'confirm: ' with 0 as default
+
+
+4. Resource modules
+
+- Network resource modules enable reading and configuring specific configuration sections, such as VLANs, interfaces, Simple Network Management Protocol (SNMP), Open Shortest Path First (OSPF), ACLs, and others. Network resource modules provide a consistent experience across different network devices.
+
+Configure Layer 3 interfaces using the following modules
+
+- cisco.ios.ios_l3_interfaces
+- arista.eos.eos_l3_interfaces
+- junipernetworks.junos.junos_l3_interfaces
+
+
+2.2.2 Using Handlers to Make Persistent Changes to Managed Network Nodes
+
+---
+- name: Configure login banners
+  hosts: ios
+  gahter_facts: false
+  tasks:
+    - name: Configure banner on IOS devices
+      cisco.ios.ios_banner:
+        banner: login
+        text: Managed by Ansible
+        state: present
+      changed_when: true
+      notify: ios_save_cahnges
+
+  handlers:
+    - name: ios_save_cahnges
+      cisco.ios.ios_config:
+        save_when: always
+
+2.3.0 Implementing Multiple Plays
+
+---
+- name: First play - backup cisco iso
+  hosts: ios
+  gather_facts: false
+  tasks:
+    - name: backup iso 
+      cisco.iso.iso_config:
+        backup: true
+        backup_options:
+          filename: {{ inventory_hostname }}.cfg
+          dir_path: /configbackups
+
+- name: Second play backup juniper config
+  hosts: junos
+  gather_facts: false
+
+  tasks:
+    - name: Enable the netconf service on port 830
+      vars:
+        ansible_connection: ansibe.netcommon.network.cli
+      junipernetworks.junos.junos_netconf:
+        netconf_port: 830
+        state: present
+
+    - name: back up junos configuration
+      junipernetworks.junos.junos_config:
+        backup: true
+        backup_options:
+          filename: {{ inventory_hostname }}.cfg
+          dir_path: /configbackups
+
+2.3.1 Privilege Escalation
+
+! Important
+
+- For privilege escalation to work on managed network node you must set connection type to either
+
+'connection: ansible.netcommon.network_cli'
+'connection: ansible.netcommon.httpapi'
+
+- Privilege escalation can be enabled at inventory level
+
+$ cat inventory
+
+ansible_netowrk_os=cisco.iso.iso
+ansible_connections=ansible.netcommon.network_cli
+ansible_become=yes
+ansible_become_method=enable
+ansible_user=student
+
+2.3.2 Selecting Modules
+
+- Automation execution invironment include the following modules
+
+-> cisco.iso
+-> cisco.nxos
+-> junipernetworks.junos
+-> arista.eos
+-> paloalto.panos
+
+$ ansible-navigator -s doc cisco.ios.ios_config
+
+3.0 Managing and Running Playbooks
+
+3.0.1 Initial Git Configuration
+
+$ git clone git@git.lab.example.com:netconfig.git
+$ git config --global user.name 'student user'
+$ git config --global user.email student@example.com
+$ git config --global push.default simple
+$ git config --global credential.http://git@git.example.com.username student
+$ git config --global credential.helper cache --timeout=7200
+
+$ git checkout -b feature2
+$ git add .
+$ git commit -m "add feature2"
+$ git pull
+$ git checkout main
+$ git merge feature2
+
+$ git log
+$ git status
+$ git revert file.txt
+
+$ vi .gitignore
+roles/**
+!roles/requirements.yml
+collections/ansible_collections
+
+3.1.0 Running Playbooks in Automation Controller
+
+3.1.1 Exploring Resources in Automation Controller
+
+- Several resource must exist before you create a job template
+
+1. Machine Credential to connect on managed host
+2. Source Control Credential to download and synchronize a Git repository
+3. Project the specify the location of content such as playbook
+4. Inventory
+
+3.1.2 Creating Credential Resources
+
+- Ansible Galaxy/Ansible Automation Hub API Token
+- Machine
+- Source Control
+
+3.2.0 Troubleshooting Playbooks
+
+3.2.1 Debugging by Displaying Variable Values
+
+ansible.builtin.debug:
+
+- name: Gather IOS interface facts
+  cisco.iso.facts:
+    gather_subset: interfaces
+
+- name: Disaply the operating system version running on mananged host
+  ansible.builtin.debug:
+    msg: "Running the {{ ansible_net_version }} OS version"
+
+- name: Display the IPv4 addresses configured on the managed node
+  ansible.builtin.debug:
+    var: ansible_net_all_ipv4_addresses
+
+- name: Display the network device serial number
+  ansible.builtin.debug:
+    var: ansible_net_serialnum
+    verbosity: 2
+
+3.2.2 Conditionals and Command Module Arguments
+
+Option    Result from executing a command on the managed node
+eq        Result is equal to what follows the conditional.
+neq       Result is not equal to what follows the conditional.
+gt        Result has a value greater than the value that follows the conditional.
+ge        Result has a value greater than or equal to the value that follows the conditional.
+lt        Result has a value less than the value that follows the conditional.
+le        Result has a value less than or equal to the value that follows the conditional.
+contains  Result contains the string that follows the conditional.
+
+-> 'wait_for:' can be used to specify one or more conditions to evaluate
+
+-> 'retries:' By default, the number of retries is set to 9.
+
+-> 'interval:' By default, the interval in seconds between retries is 1
+
+- name: Wait for the second netowrk interface
+  cisco.iso.iso_command:
+    command:
+      - show interfaces
+    wait_for:
+      - result[0] contains 'GigabitEthernet1 is up'
+    interval: 2
+    retries: 19
+
+3.2.3 Including Prompts in the Playbook
+
+- When working directly with network devices, sometimes there is a prompt confirmation message that must be answered to perform some actions or changes on the devices.
+
+- cisco.iso.iso_command and cisco.nxos.nxos_command modules include the 'prompt' parameter to provide answers to interactive prompts when command require
+
+- name: Reboot the managed node
+  cisco.iso.iso_command:
+    command: 
+      - command: 'reload'
+        prompt: 'Proceed with reload\?'
+        answer: y
+
+---
+- name: Gather information from IOS devices
+  hosts: ios
+  gather_facts: false
+  tasks:
+    - name: Gather information from IOS devices
+      ios_command:
+        commands:
+        - show version
+        - show interfaces
+
+3.2.4 Playbook Artifacts from Automation Content Navigator
+
+---
+- name: Gather interfaces information for Junos devices
+  hosts: junos
+  gather_facts: false
+  tasks:
+    - name: Run command on remote managed nodes
+      ansible.netcommon.cli_command: ( this will faild, but ansible-lint won't show), use ansible.netcommon.network_cli 
+        command: show interfaces
+
+3.3.0 Troubleshooting Ansible Network Communication
+
+3.3.1 Troubleshooting Network Automation
+
+- Connectivity issues, such as routing issues from the Ansible control node to the managed nodes.
+- Authentication issues, such as an incorrect username, password, or SSH key credentials.
+- Timeout issues, where commands take longer to run than the configured timeout value. A timeout issue might also be due to an authentication or connectivity issue.
+
+3.3.2 Isolating and Resolving Connectivity Issues
+
+- use platform specific *_ping module
+
+---
+- name: Ping cisco managed nodes
+  hosts: ios
+  gather_facts: false
+  tasks:
+    - name: Ping cisco mananged nodes
+      cisco.ios.ios_ping:
+        dest: "{{ inventory_hostname }}"
+        count: 5
+
+3.3.3 Troubleshooting Privilege Escalation
+
+$ cat inventory
+
+[ios:vars]
+ansible_connection=ansible.netcommon.network.cli
+ansible_network_os=cisco.ios.ios
+ansible_become=true
+ansible_become_method=enable
+
+3.3.4 Isolating and Resolving Timeout Issues
+
+- name: Save the running-config
+  vars:
+    ansible_command_timout: 120
+  cisco.iso.iso_command:
+    command:
+      - copy running-config startup-config
+
+3.3.5 Using the Long Form of Commands
+
+---
+- name: Change interface configuration
+  hosts: ios
+  gather_facts: false
+  tasks:
+    - name: Shutdown interface Gig0/1
+      cisco.ios.ios_config:
+        lines:
+          - shutdown
+        parents: interface GigabitEthernet0/1
+
+4.0 Managing Variables and Facts
+
+4.1 Using Variables in Playbooks
+
+---
+- name: Configuring hostname for IOS managed node
+  hosts: iosxe.example.com
+  gather_facts: false
+  vars:
+    router_hostname: rtr01.example.com
+  tasks:
+    # This line reads: Set the rtr01.example.com hostname
+    - name: Set the {{ router_hostname }} hostname
+      cisco.ios.ios_hostname:
+        config:
+          # This line sets the rtr01.example.com hostname for IOS
+          hostname: "{{ router_hostname }}"
+        state: merged
+
+4.1.1 Capturing Task Output with Registered Variables
+
+- name: Gather IOS vlan
+  cisco.ios.ios_vlans:
+    state: gathered
+  register: vlans_data
+
+- name: Show the vlan data
+  ansible.builtin.debug:
+    var: vlans_data
+
+4.1.2 Using Dictionaries as Variables
+
+vlan:
+  hypervisors:
+    name: physical-servers
+    mtu: 9000
+    id: 1000
+  vms:
+    name: virtual-servers
+    mtu: 1500
+    id: 2000
+  dmz:
+    name: dmz
+    mtu: 1500
+    id: 3000
+
+- name: Returns 'dmz'
+  ansible.builtin.debug:
+    var: vlan['dmz']['name']
+
+- name: Returns '9000'
+  ansible.builtin.debug:
+    var: vlan['hypervisors']['mtu']
+
+- name: Returns '2000'
+  ansible.builtin.debug:
+    var: vlan['vms']['id']
+
+
+4.1.3 Special Variables
+
+-> ansible_connection: defined the connection plug-in to use to access the managed host
+
+-> ansible.netcommon.network_cli: Command-line connection over  (SSH) -> For Cisco
+
+-> ansible.netcommon.netconf: eXtensible Markup Language (XML) over the SSH -> For Juniper
+
+-> ansible.netcommon.httpapi: Connection over https
+
+-> ansible_network_os: defines the managed node operating system
+
+As a best practices, always define the 'ansible_network_os' for managed network node
+
+$ cat inventory
+
+[eos]
+ansible_network_os=arista.eos.eos
+
+[ios]
+ansible_network_os=cisco.ios.ios
+
+[iosxr]
+ansible_network_os=cisco.iosxr.iosxr
+
+[nxos]
+ansible_network_os=cisco.nxos.nxos
+
+[junos]
+ansible_network_os=junipernetworks.junos.junos
+
+-> ansible_host: defines the IP or fqdn
+
+-> ansible_user: defines the user used to connect on managed host
+
+-> ansible_become: Set this value to :true. The privilege escalation is supported only for 'ansible.netcommon.network.cli' and 'ansible.netcommon.httpapi'
+
+-> ansible_method: enable
+
+
+4.1.4 Assigning Variables to Inventory Groups
+
+- Assign variables in 'host_vars' or 'group_vars' directories
+
+$ tree -F group_vars/
+group_vars/
+├── arista.yml
+├── ios.yml
+└── junos.yml
+
+$ cat groups_vars/ios.yml
+
+---
+ansible_network_os: cisco.ios.ios
+ansible_connection: ansible.netcommon.network_cli
+
+
+4.1.5 Assigning Variables to Inventory Hosts
+
+- Variables defined in 'host_vars' have a higher percedence than variables defined for inventory
+
+- If you have group_vars and host_vars subdirectories in the same directory as your playbook, then Ansible automatically includes those variables for managed nodes and groups of managed nodes.
+
+- If you use a flat inventory file in a directory other than the one the playbook is in, then Ansible also automatically includes the group_vars and host_vars directories in the inventory file directory.
+
+- If you use an inventory directory in your project directory, and that inventory file contains multiple inventory files, then Ansible includes the group_vars and host_vars subdirectories of your inventory directory.
+
+
+4.1.6 Overriding Variables from the Command Line
+
+$ ansible-navigator run snmp_configuration.yml -e state=managed
+
+
+4.2.0 Managing Facts
+
+4.2.1 Default Fact Gathering
+
+Cisco -> cisco.ios.ios_facts
+Juniper -> junipernetworks.junos.junos_facts
+
+---
+- name: Gather and disaply default facts for IOS managed nodes
+  hosts: ios
+  gather_facts: false
+  tasks:
+    - name: Gather IOS facts
+      cisco.ios.ios_facts:
+        gather_subset:
+          - min
+
+    - name: Disaply facts
+      ansible.builtin.debug:
+        var: ansible_facts
+
+
+-> Ansible Facts for Network devices
+
+- ansible_facts['net_hostname'] : hostname
+
+- ansible_facts['net_serialnum'] : serial number
+
+- ansilbe_facts['net_system'] : Network OS
+
+- ansible_facts['net_version'] : Network OS version
+
+- ansible_facts['net_all_ipv4_addresses'] : IPv4 add
+
+- ansible_facts['net_config'] : Current Active Configuration
+
+4.2.1 Registering Facts to a Variable
+
+---
+- name: Gather and disaply facts for IOS managed nodes
+  hosts: ios
+  gather_facts: true
+  tasks:
+    - name: Gather ios facts
+      cisco.ios.ios_facts:
+        gather_subset:
+          - all
+      register: iosfacts
+
+    - name: Disaply a fact
+      ansible.builtin.debug:
+        var: iosfacts['ansible_facts']['ansible_net_hostname']
+
+---
+- name: Gather facts from differenct network platform
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Gather IOS facts
+      cisco.ios.ios_facts:
+        gather_subset:
+          - all
+      when: ansible_network_os == 'cisco.ios.ios'
+
+    - name: Gather junos facts
+      junipernetwork.junos.junos_facts:
+        gather_subset:
+          - all
+      when: ansible_network_os == 'junipernetwork.junos.junos'
+
+4.2.2 Gathering a Subset of Facts
+
+- name: Collect only configuration facts
+  cisco.ios.ios_facts:
+    gather_subset:
+      - config
+
+4.2.3 Gathering Facts as Structured Resource Data
+
+- Use 'gather_network_resources' paramter to gather facts as structured network resources data
+
+- You can gather all resource facts or a subset of resource facts, similar to the gather_subset parameter. For example, when using the cisco.ios.ios_facts module, you can set the gather_network_resources parameter to values such as the following:
+
+---
+- name: Gather facts as resources data
+  hosts: ios
+  gather_facts: false
+  tasks:
+    - name: Gather ios facts
+      cisco.ios.ios_facts:
+        gather_network_resources:
+          - all
+
+    - name: Display facts
+      ansible.builtin.debug:
+        var: ansible_network_resources
+
+4.2.4 Magic Variables
+
+- hostvars : contains the variables for managed nodes
+
+- group_names : lists all groups that the current managed node is in.
+
+- groups :  lists all groups and managed nodes in the inventory.
+
+- inventory_hostname : contains the hostname for the current managed node as configured in the inventory.
+
+
+4.3.0 Using Surveys to Set Variables
+
+4.3.1 Defining Extra Variables
+
+- Define the variable in 'Variables' field of the job template.
+
+- Select 'Prompt on launch' for the 'Variables' field on the jjob template.
+
+- Both methods are the same as using the -e or --extra-vars options for the ansible-navigator command
+
+4.4.0 Transforming Data with Filters
+
+4.4.1 Network Information Filters
+
+-> ansible.utils.ipaddr 
+
+- 'ansible.utils.ipaddr' filter can validate the syntax of IP addresses, filter out bad data, convert from Variable Length Subnet Mask (VLSM) to Classless Inter-domain Routing (CIDR) subnet prefix notation, perform subnet math, or find the next usable address in a network range.
+
+4.4.2 Testing IP Addresses
+
+{{ my_host_list | ansible.utils.ipaddr }}
+
+4.4.3 Filtering Data
+
+- ansible.utils.ipaddr('host') : returns individual IP addresses (in the correct CIDR prefix format). This filter does not return networks.
+
+- ansible.utils.ipaddr('net') : returns valid network specifications and converts the netmask into a CIDR prefix if necessary. This filter does not return individual IP addresses.
+
+- ansible.utils.ipaddr('private') : returns IP addresses or network ranges that are in ranges reserved by Internet Assigned Numbers Authority (IANA)
+
+- ansible.utils.ipaddr('public') : returns addresses and networks in public (globally routable)
+
+
+4.4.4 Manipulating IP Addresses
+
+- ansible.utils.ipaddr('address') : 192.0.2.1 for the 192.0.2.1/24 
+
+- ansible.utils.ipaddr('netmask') : 255.255.255.0 for the 192.0.2.1/24 address
+
+- ansible.utils.ipaddr('prefix') : returns the CIDR prefix, such as 24 for the 192.0.2.1/24 address.
+
+- ansible.utils.ipaddr('revdns') : returns the IPv4 or IPv6 address in DNS PTR record format, such as 1.2.0.192.in-addr.arpa. for the 192.0.2.1/24 address.
+
+- ansible.utils.ipaddr('network') : 192.0.2.0 for the 192.0.2.1/24 address.
+
+- ansible.utils.ipaddr('broadcast') : 192.0.2.255 for the 192.0.2.1/24 address
+
+4.4.5 Calculating, Validating, and Reformatting Network Information
+
+- specify options to the ansible.utils.ipaddr filter to generate an address and identify valid addresses in a network.
+
+-> {{ '192.0.2.0/24' | ansible.utils.ipaddr(5) }} : returns the fifth address (192.0.2.5/24) on the 192.0.2.0/24
+
+-> ansible.utils.ipaddr('range_usable') : returns the range of usable host addresses for a network, such as 192.0.2.1-192.0.2.254 for the 192.0.2.0/24 network
+
+-> {{ '192.0.2.5/24' | ansible.utils.ipaddr('next_usable') }} :  returns the 192.0.2.6 address.
+
+The following filters also belong to the ansible.utils collection:
+
+1. ansible.utils.network_in_usable
+
+- {{ '192.0.2.0/24' | ansible.utils.network_in_usable('192.0.2.5') }} : determine if that address is usable for hosts on that network.
+
+2. ansible.utils.cidr_merge
+
+- merge a list of subnets and individual hosts into the minimal representation. 
+
+vars:
+  my_networks:
+    - 10.0.1.0/24
+    - 10.0.2.0/24
+    - 2001:db8:0:1::/64
+  merged_networks: "{{ my_networks | ansible.utils.cidr_merge }}"
+
+3. ansible.utils.ipwrap
+
+- puts brackets around the address part of items that appear to be IPv6 addresses. 
+
+vars:
+  provided:
+    - 192.168.2.1
+    - 10.0.0.128/25
+    - 172.24.10.0/255.255.255.0
+    - ff02::1
+    - ::1
+    - 2001::1/64
+    - www.redhat.com
+  brackets: "{{ provided | ansible.utils.ipwrap }}"
+
+5.0.0 Implementing Task Control
+
+5.0.1 Writing Loops and Conditional Tasks
+
+- Simple loops
+
+- name: Ping hosts
+  cisco.ios.ios_ping:
+    dest: "{{ item }}"
+    state: present
+  loop:
+    - hosta.lab.example.com
+    - hostb.lab.example.com
+
+- name: Ping hosts
+  vars:
+    host_list:
+      - hosta.lab.example.com
+      - hostb.lab.example.com
+  cisco.ios.ios_ping
+    dest: "{{ item }}"
+    state: present
+  loop: "{{ host_list }}"
+
+5.0.2 Loops over a List of Dictionaries
+
+- name: Users exist with correct password
+  no_log: true
+  cisco.ios.ios_user:
+    name: "{{ item['name'] }}"
+    hashed_password:
+      type: "{{ item['hash_type'] }}"
+      value: "{{ item['hashed_password'] }}"
+    update_password: always
+    state: present
+  loop:
+    - name: ansible
+      hash_type: 5
+      hashed_password: "$IjvDh1wt$O6ceAhpuYesiPJh.s2weQ1"
+    - name: netops
+      hash_type: 5
+      hashed_password: "$/bqwREWG$0zUXcphlYOll0anjs/tEs1"
+
+5.0.3 Using Register Variables with Loops
+
+---
+- name: Ping hosts from IOS manage nodes
+  hosts: iosxe1.lab.example.com
+  gather_facts: false
+  vars:
+    host_list:
+      - hosta.lab.example.com
+      - hostb.lab.example.com
+  tasks:
+    - name: Ping hosts
+      cisco.ios.ios_ping:
+        dest: "{{ item }}"
+      loop: "{{ host_list }}"
+      register: ping_result
+
+    - name: Show ping_result
+      ansible.builtin.debug:
+        var: {{ ping_result | map(attribute='rtt') }}
+
+
+5.0.4 Running Tasks Conditionally
+
+- 'when' statement
+
+The following scenarios illustrate the use of conditions in Ansible
+
+1. Run task that match a specific value for 'ansible_network_os' variable
+2. Stop a playbook when a variable is not defined or does not a valid value
+3. Define a hard limit, for example 'min_memory'
+
+- String are always treated by 'when' as 'true' if they contain any content. For example setting the value of a variable to "false" (quoted) evaluates to the 'true' 
+
+- name: The task is skipped
+  vars:
+    my_bool: "false"
+  ansible.builtin.debug:
+    msg: The task is running
+  when: my_bool == false
+
+- name: Thee task run
+  vars:
+    my_bool: "false"
+  ansible.builtin.debug:
+    msg: The task run
+  when: my_bool | bool == false
+
+Example Conditionals
+
+- equal (string)            -> ansible_facts['net_version'] == "17.06.02"
+- not equal (string)        -> ansible_gacts['net_version'] != "17.06.02"
+- equal (numeric)           -> max_memory == 512
+- not equal                 -> max_memory != 512
+- less than                 -> min_memory < 128
+- greater than              -> min_memory > 0
+- Less than or equal to     -> min_memory <= 256
+- Greater than or equal to  -> min_memory >= 512
+- Variable exists           -> my_var is defined
+- Variable does not exist   -> my_vars is not defined
+- Boolean variable is true  -> my_bool
+- Boolean variable is false -> not my_bool
+- First variable's value exists as a value in second variable's list -> facility in facility_choices
+
+---
+- name: Demonstrate the "in" keyword
+  hosts: ios
+  gather_facts: false
+  vars:
+    facility_choices: >-
+      [auth, cron, daemon, kern, local0, local1, local2, local3, local4,
+      local5, local6, local7, lpr, mail, news, sys10, sys11, sys12, sys13,
+      sys14, sys9, syslog, user, uucp]
+  tasks:
+    - name: Fail if 'facility' is not defined
+      ansible.builtin.assert:
+        that: facility is defined
+        fail_msg: >-
+          The 'facility' variable must be defined such as: -e facility=local5
+
+    - name: Validate 'facility' choice
+      ansible.builtin.assert:
+        that: facility in facility_choices
+        fail_msg: >-
+          The value of the 'facility' variable ({{ facility }}) is not valid.
+          Use one of the following values: {{ facility_choices }}
+
+5.0.5 Testing Multiple Conditions
+
+when: ansible_network_os == "cisco.ios.ios" or ansible_network_os == "cisco.iosxr.iosxr"
+
+when: ansible_facts['net_model'] == "C8000V" and ansible_facts['net_version'] == "17.06.02"
+
+when: >
+  (ansible_network_os == "cisco.ios.ios" and
+    ansible_facts['net_model'] == "C8000V")
+  or
+  (ansible_network_os == "cisco.iosxr.iosxr" and
+  ansible_facts['net_model'] == "ASR9000")
+
+
+5.1.0 Handling Task Failure
+
+5.1.1 Ignoring Task Failure
+
+- 'ignore_errors:' statement
+
+tasks:
+  - name: Disaply VLAN id 510 infomration
+    cisco.ios.ios_command:
+      commands:
+        - show vlan id 510
+    ignore_errors: true
+
+5.1.2 Specifying Task Failure Conditions
+
+- 'failed_when:' statement
+
+tasks:
+  - name: Dispplay configured VLAN's
+    cisco.ios.ios_command:
+      commands: show vlans
+    register: vlan_result
+    failed_when: "'No Virtual LANs configured' in vlan_result['stdout'][0]"
+
+5.1.3 Forcing a Task Failure with a Custom Message
+
+- ansible.builtin.fail
+
+tasks:
+  - name: Disaply configured VLANs
+    cisco.ios.ios.command:
+      commands: show vlans
+    register: vlan_result
+
+  - name: Reporting command failure
+    ansible.builtin.fail:
+      msg: "Missing VLAN configuration"
+    when: "'No Virtual LANs configured' in vlan_result['stdout'][0]"
+
+5.1.4 Controlling If a Task Reports That It Made a Change
+
+- 'changed_when:' statement
+
+tasks:
+  - name: Gather IOS interface facts
+    cisco.ios.ios_facts:
+      gather_network_resources: vlans
+
+  - name: Copying the vlan configuration to a file
+    ansible.builtin.copy:
+      content: "{{ ansible_netowrk_resources['vlans'] | to_nice_yaml }}"
+      dest: "{{ inventory_hostname }}_vlan.yml"
+      mode: 0600
+    changed_when: false
+
+5.1.5 Error Handling by Using Ansible Blocks
+
+tasks:
+    - name: Verify DNS for IOS managed nodes
+      block:
+        - name: Verifying initial DNS configuration
+          cisco.ios.ios_command:
+            commands: show ip name-server
+          register: ios_dns
+          failed_when: ios_dns['stdout'][0] != '172.25.250.220'
+
+      rescue:
+        - name: Add the misconfigured server to the list
+          ansible.builtin.lineinfile:
+            path: misconfigured_servers.txt
+            line: "{{ inventory_hostname }}"
+            create: yes
+
+        - name: Configure DNS settings in failed managed nodes
+          cisco.ios.ios_system:
+            name_servers: 172.25.250.220
+
+      always:
+        - name: Verifying DNS configuration
+          cisco.ios.ios_command:
+            commands: show ip name-server
+          register: final_dns
+
+        - name: Displaying final DNS configuration
+          ansible.builtin.debug:
+            var: final_dns['stdout']
+
+5.2.0 Building a Workflow Job Template
+
+- Create a workflow job template in AAP that launches a branching chain of jobs based on the success or failure of each job on workflow
+
+5.2.1 Creating Workflow Job Templates
+
+1.Go to Resources → Templates and then click Add → Add workflow template.
+
+2.At a minimum, enter a name for the workflow template and then save the template.
+
+After creating a workflow job template, you can define an associated workflow by using the workflow visualizer.
+
+
+6.0.0 Simplifying Playbooks with Roles and Ansible Content Collections
+
+6.0.1 Including and Importing Files
+
+---
+- name: Add cisco IOS VLAN configuration
+  cisco.ios.ios_vlans:
+    config: "{{ vlans }}"
+    state: merged
+
+- name: Verify cisco ios vlan
+  cisco.ios.ios_command:
+    commands: show vlans
+  register: vlan_data
+
+- name: disaply configured VLANs
+  ansible.builtin.debug:
+    var: vlan_data
+
+6.0.2 Importing or Including Files
+
+-> Import playbook
+---
+- name: Enable NETCONF service
+  ansible.builtin.import_playbook: juniper_netconf.yml
+
+- name: Configure SNMP settings
+  ansible.builtin.import_playbook: juniper_snmp.yml
+
+---
+- name: Back up the IOS configuration
+  hosts: ios
+  gather_facts: false
+  tasks:
+    - name: Back up the current configuration
+      cisco.ios.ios_config:
+        backup: true
+        backup_options:
+          filename: "{{ inventory_hostname }}.txt"
+
+- name: Import IOS VLANs playbook
+  ansible.builtin.import_playbook: ios_vlans.yml
+
+-> Importing Task Files
+
+---
+- name: Juniper Junos VLANs configuration
+  hosts: junos
+  gather_facts: false
+  tasks:
+  - name: Import Juniper Junos VLANs tasks
+    ansible.builtin.import_tasks: junos_vlan.yml
+
+-> Using conditionals in imported tasks
+
+---
+- name: Apply security settings on the managed nodes
+  hosts: all
+  gather_facts: false
+  tasks:
+  - name: Import Juniper Junos security settings tasks
+    ansible.builtin.import_tasks: junos_security.yml
+    when: ansible_network_os == "junipernetworks.junos.junos"
+
+  - name: Import Cisco IOS security settings tasks
+    ansible.builtin.import_tasks: ios_security.yml
+    when: ansible_network_os == "cisco.ios.ios"
+
+-> Including Task Files
+
+---
+- name: Cisco IOS NTP configuration
+  hosts: ios
+  gather_facts: false
+  tasks:
+  - name: Include Cisco IOS NTP tasks
+    ansible.builtin.include_tasks: ios_ntp.yml
+    loop: "{{ expected_users }}"
+    when: vlans is defined
+
+-> Defining Variables
+
+- name: Import task file and set variables
+  ansible.builtin.import_tasks: tasks/ios_verification.yml
+  vars:
+    ios_service: NTP
+    ios_commands:
+      - show run | include ntp
+
+6.1.0 Ansible Role Structure
+
+6.1.1 Using Ansible Roles in a Play
+
+- name: Run a role as a task
+  hosts: ios
+  tasks:
+    - name: A normal task
+      ansible.builtin.debug:
+        msg: 'first task'
+
+    - name: A task to import rol2 here
+      ansible.builtin.import_role:
+        name: role2
+
+- name: Run a role as a task
+  hosts: ios
+  tasks:
+    - name: A task to include role2 here
+      ansible.builtin.import_role:
+        name: role2
+      vars:
+        var1: val1
+        var2: val2
+
+---
+- name: A play that runs the second role with variables
+  hosts: ios
+  roles:
+    - role: role1
+    - { role: role2, var1: val1, var2: val2 }
+
+6.1.2 Special Tasks Sections
+
+-> pre_tasks and post_tasks
+
+- name: Play to illustrate order of execution
+  hosts: ios
+  pre_tasks:
+    - name: This task runs first
+      ansible.builtin.debug:
+        msg: This task is in pre_tasks
+      notify: my handler
+      changed_when: true
+  roles:
+    - role: role1
+  tasks:
+    - name: This task runs after the roles
+      ansible.builtin.debug:
+        msg: This task is in tasks
+      notify: my handler
+      changed_when: true
+  post_tasks:
+    - name: This task runs last
+      ansible.builtin.debug:
+        msg: This task is in post_tasks
+      notify: my handler
+      changed_when: true
+
+6.2.0 Creating Roles
+
+6.2.1 Creating an Ansible Role Structure
+
+$ cd roles
+$ ansible-galaxy role init vlans_configuration
+
+6.3.0 Deploying Roles from External Content Sources
+
+6.3.1 Searching for Roles
+
+$ ansible-galaxy search vpn --platforms EL
+
+6.3.2 Using a Role Requirements File
+
+$ vi roles/requiremets.yml
+
+---
+- src: https://git.example.com/someauthor/netrole
+  scm: git
+  version: "1.5.0"
+
+- src: file:///opt/local/roles/myrole.tar
+  name: myrole
+
+$ ansible-galaxy role install -r roles/requirements.yml -p roles
+
+6.4.0 Getting Roles and Modules from Ansible Content Collections
+
+6.4.1 Ansible Content Collections
+
+- ansible.netcommon collection
+- cisco.ios collection
+- network.ospf collection
+
+6.4.2 Installing Ansible Content Collections
+
+$ ansible-galaxy collection install network.ospf -p collections
+
+$ ansible-galaxy collection install /tmp/ansible-netcommon-5.1.0.tar.gz -p collections
+
+6.4.3 Installing Ansible Content Collections with a Requirements File
+
+---
+collections: 
+  - name: network.ospf 
+
+  - name: network.base
+    version: 2.0.0 3
+
+  - name: /tmp/ansible-netcommon-5.1.0.tar.gz
+
+  - name: http://www.example.com/network-bgp-2.0.0.tar.gz
+
+  - name: git+https://github.com:redhat-cop/network.vpn.git
+    version: main
+
+6.4.4 Using Resources from Ansible Content Collections
+
+- After you install an Ansible collection you can use it in ansilbe playbooks.
+
+$ ansible-navigator collections -m interactive
+
+
+EX: invokes the 'cli_config module' from the 'ansible.netcommon' collection for a task.
+---
+- name: Update the configuration on junos1.lab.example.com
+  hosts: junos1.lab.example.com
+  tasks:
+    - name: Ensure the proper configuration is in place
+      ansible.netcommon.cli_config:
+        replace: /var/home/ansible/junos01.cfg
+
+EX: use the 'run' role from the 'network.ospf' collection.
+
+---
+- name: Perform health checks
+  hosts: ios
+  gather_facts: false
+  tasks:
+    - name: OSPF Manager
+      ansible.builtin.include_role:
+        name: network.ospf.run
+      vars:
+        actions:
+          - name: health_check
+            vars:
+              details: true
+              checks:
+                - name: all_neighbors_up
+                - name: all_neighbors_down
+                - name: min_neighbors_up
+                  min_count: 1
+                - name: ospf_status_summary
+
+7.0.0 Automating Network Administration Tasks
+
+- Configure connectivity to managed network devices, gather device information, and generate a dynamic report that documents the state of your network infrastructure.
+
+7.0.1 Collect Information about Your Current Environment
+
+1. Collect facts about your mananged nodes using vendor-specific *_facts modules, such as 'cisco.ios.ios_facts' , 'junipernetworks.junos.junos_facts' and 'arista.eos.eos_facts' modules
+
+2. Create backup file of the configuration of your managed nodes using vendor-specific *_config modules, such as 'cisco.ios.ios_config', 'junipernetworks.junos.junos_config' and  'arista.eos.eos_config'
+
+3. Save configuration infromation about your managed nodes using the 'network.base.resource_manager' role
+
+7.0.2 Collecting and Using Facts to Gain Infrastructure Awareness
+
+-> To collect a full set of facts, disable fact at play leve, 'gather_facts: false' and use the following task
+
+- name: Collect facts
+  cisco.ios.ios_facts:
+    gather_subset:
+      - all
+
+-> Disaply collected facts
+
+- name: Display ansible_facts['net_config']
+  ansible.builtin.debug:
+    vars: ansible_facts['net_config']
+
+-> Use a filter to process the ansible_facts['net_config'] variable 'regex_findall'
+
+- name: Disaply SNMP configuration
+  ansible.builtin.debug:
+    var: ansible_facts['net_config'] | regex_findall('^snmp.*$', multiline=true)
+
+- name: Display configuration as a list
+  vars:
+    separator: "\n"
+  ansible.builtin.debug:
+    var: ansible_facts['net_config'] | split(separator)
+
+
+-> To make it easire to use a variable , use ansible.builtin.set_fact:
+
+- name: Set snmp_config_lines
+  ansible.builtin.set_fact:
+    snmp_config_lines: >-
+      {{ ansible_facts['net_config'] | regex_findall('^snmp.*$', multiline=true) }}
+
+- name: Display snmp_config_lines
+  when: snmp_config_lines | lenght > 0
+  ansible.builtin.debug:
+    var: snmp_config_lines
+
+
+7.0.3 Creating and Using Backup Files to Gain Infrastructure Awareness
+
+-> Usually the content of a backup file matched the content in ansible_facts['net_config'] variable.
+
+-> For Juniper Junos the content of backup files DOES NOT MATCH the content of ansible_facts['net_config']
+
+-> junipernetworks.junos.junos_config module provides the 'backup_format' option which is not found on other *_config modules.
+
+- name: Create a backup file in JSON format for Junipernetworkjunos
+  juniernetwork.junos.junos_config:
+    backup: true
+    backup_options:
+      filename: "{{ inventory_hostname }}.json"
+      backup_format: json
+
+-> If you decide to prceess the content of backup files, use 'ansible.builtin.slurp' module to:
+
+- name: Slurp backup file
+  ansible.builtin.slurp:
+    src: /backups/junos1.lab.example.com.json
+  register: slurped_file
+
+- name: Disaply decoded slurped_file['content']
+  ansible.builtin.debug:
+    var: slurped_file['content'] | b64decode | from_json
+
+- name: Set json_content
+  ansible.builtin.set_fact:
+    json_content: >
+      {{ slurped_file['content'] | b64decode | from_json }}
+
+- name: Show json_content['configuration']['interfaces']
+  ansible.builtin.debug:
+    var: json_content['configuration']['interfaces']
+
+7.0.4 Saving Configuration Settings Using the Resource Manager Role
+
+-> Use the 'resource_manager' role from the 'network.base' collection to generate YAML files that contain infomration about the infrasturcutre of your managed nodes.
+
+- name: Network Resource Manager
+  ansible.builtin.include_role:
+    name: network.base.resource_manager
+  vars:
+    action: persisit
+    inventory_directory: ./
+
+
+!! Important
+The 'persist' action expects to find an inventory file named inventory.yaml in the directory defined by the inventory_directory variable. By default, the inventory_directory variable has the ./inventory value.
+
+- If the inventory file in your Ansible project uses the INI format, then you can redirect the output of the ansible-navigator inventory command to create a YAML version of the inventory file:
+
+$ ansible-navigator inventory -i inventory --list --yaml > inventory.yml
+
+- name: Show IPv4 addresses for the GigabitEthernet1 interface
+  ansible.builtin.debug:
+    var: >-
+      hostvars[inventory_hostname]['l3_interfaces'] |
+      selectattr('name', '==', 'GigabitEthernet1') |
+      map(attribute='ipv4') |
+      flatten |
+      map(attribute='address')
+
+
+7.1.0 Generating Configuration Settings from Jinja2 Templates
+
+7.1.1 Templating Files
+
+-> An alternative way to deploy network device configurations is to template them.
+
+7.1.2 Using Delimiters
+
+{{ variable }} -> is replace with the variable value
+
+{# COMMENT #} -> comment
+
+{{% EXPR %%}} -> for or if loop
+
+{# Obtain the hostname from facts #}
+hostname {{ ansible_facts['net_hostname'] }}
+
+7.1.3 Building a Jinja2 Template
+
+{# Hostname from facts #}
+hostname {{ ansible_facts['net_hostname'] }}
+ip name-server vrf default 172.25.250.220
+!
+spanning-tree mode mstp
+!
+system l1
+   unsupported speed action error
+   unsupported error-correction action error
+!
+interface Ethernet1
+!
+interface Loopback100
+   description Loopback100 Interface
+   ip address 10.10.10.100/32
+!
+{# Use Loopback101 info from variable #}
+interface {{ interfaces[inventory_hostname][1]['name'] }}
+   description {{ interfaces[inventory_hostname][1]['name'] }} Interface
+   ip address {{ interfaces[inventory_hostname][1]['address'] }}
+!
+interface Management1
+   ip address 172.25.250.24/24
+!
+
+
+7.1.3 Deploying Jinja2 Templates
+
+-> After you create a Jinja2 template you can use the *_config module 
+
+EX: Deploy a device configuration from a template to an Arista node.
+
+- name: Deploy configuration template on EOS
+  arista.eos.eos_config:
+    src: eos_configuration.j2
+    save_when: changed
+
+EX: Deploy a device config to Cisco IOS
+
+- name: Deploy configuration tempalate to IOS
+  cisco.ios.ios_config:
+    src: ios_configuration.j2
+    save_when: changed
+
+! Important
+
+The previous examples use the save_when option to persistently save changes. You might decide to omit this option and only save the running configuration to the startup configuration after you have validated the changes.
+
+
+7.1.4 Using Loops
+
+{% for interface in interfaces %}
+{{ interface }}
+{% endfor %}
+
+{% for myinterface in interfces if not myinterface == "Loopback100" %}
+Interface number {{ loop.index }} - {{ myinterface }}
+{% endfor %}
+
+{% for mynode in groups['mynodes'] %}
+{{ mynode }}
+{% endfor %}
+
+{# for statement to deploy access lists #}
+{% for acl in acls %}
+   {{ acl['id'] }} permit ip host {{ acl['address'] }} any log
+{% endfor %}
+
+---
+- name: Configure access lists
+  hosts: arista01
+  vars_files:
+    - vars.yml
+  gather_facts: false
+  tasks:
+    - name: Deploy configuration
+      arista.eos.eos_config:
+        src: templates/acls.j2
+        save_when: changed
+
+7.1.5 Using Conditionals
+
+{% if finished %}
+{{ result }}
+{% endif %}
+
+7.2.0 Simplifying Tasks with Platform-independent Modules
+
+7.2.1 Platform Independence with Network Resource Modules
+
+-> Network platforms typically separate their configuration data into subsections, or resources.
+
+-> Configure Layer 3 interfaces
+
+1. cisco.ios.ios_l3_interfaces
+2. arista.eos.eos_l3_interfaces
+3. junipernetwork.junos.junos_l3_interfaces
+
+-> Configure ACL
+
+1. cisco.ios.ios_acls
+2. arista.eos.eos_acls
+3. junipernetworks.junos.junos_acls
+
+7.2.2 Network Resource Module States
+
+- Resource modules support the following states
+
+-> merged: ansible merges the current device configuration with the configuration provided in the task
+
+-> replaced: ansible replaces the current device configuration with the configuration prvided in the task.
+
+-> overridden: ansible overrides the current device configuration with the configuration provided in the tasl.
+
+Warning: Use caution with the overridden state as you could remove your access to the device.
+
+-> deleted: ansible deletes the current device configuration subsectiopn and restores any default seetings
+
+-> gathered: ansible disaply the resources details gathered from the network device. Ansible disaply these details in the 'gathered' key.
+
+-> rendered : Ansible renders the provided configuration in the task in the native format for the network platform. Ansible displays this rendered configuration in the 'rendered' key in the task output.
+
+-> parsed: parses the configuration subsection data from the running_config parameter into Ansible structured data.
+
+7.2.3 Resource Module Return Values
+
+- Network resource modules return a data structure that can be registered into a variable, or displayed in the task output.
+
+-> before: configuration, displayed as structured data, before the module runs.
+
+-> after: configuration, displayed as structured data, after the module runs.
+
+-> commands:  set of commands pushed to the network device.
+
+
+7.2.4 Platform-independent Modules
+
+-> ansible.netcommon colletcion provides modules that can be used to automate network devices withput using a particular network platform.
+
+-> list the modules available in ansible.netcommon collection:
+
+cli_command       Run a CLI command.
+cli_config        Push text-based configuration to network devices.
+grpc_config       Append configs option to an existing configuration in a gRPC-enabled devices.
+grpc_get          Fetch configuration/state data from gRPC-enabled target hosts.
+net_get           Copy a file from a network device to automation controller.
+net_ping          Use ping from a network device to ensure communication to a remote destination.
+net_put           Copy a file from automation controller to a network device.
+netconf_config    Enable the user to send a configuration XML file to a NETCONF device, and detects changes
+netconf_get       Fetch configuration/state data from NETCONF-enabled network devices.
+netconf_rpc       Execute operations on NETCONF-enabled network devices.
+network_resource  Manage resource modules.
+restconf_config   Create, update, read, or delete configuration data on RESTCONF-enabled devices.
+restconf_get      Fetch configuration/state data from RESTCONF-enabled devices.
+telnet            Execute a Telnet command.
+
+7.2.5 Sending Commands to Managed Network Nodes
+
+EX: use a separate module for each platform
+---
+- name: Run Cisco ios command
+  cisco.ios.ios_command:
+    command: "show ip interface"
+  when: ansible_network_os == 'cisco.ios.ios'
+
+- name: Run Junos command
+  junipernetworks.junos.junos_command:
+    commands: "show interface terse"
+  when: ansible_network_os == 'junipernetwork.junos.junos'
+
+- name: Run Arista EOS command
+  arista.eos.eos_command:
+    command: "show ip interface"
+  when: ansible_network_os == 'arista.eos.eos'
+
+EX: use platform-indepnedent 'ansible.netcommon.cli_command'
+
+---
+- name: Run a command across multiple network platforms
+  hosts: ios, junos, eos
+  gather_facts: false
+  vars:
+    ansible_connection: ansible.netcommon.network_cli
+  tasks:
+    - name: Run command and disaply result
+      block:
+        - name: Run a command
+          ansible.netcommon.cli_command:
+            command: "{{ some_command }}"
+          register: result
+
+        - name: Disaply result
+          ansible.builtin.debug:
+            var: result['stdout_lines']
+
+7.2.6 Simultaneously Configuring Multiple Network Platforms
+
+- Use ansible.netcommon.cli_config to cnfigure managed network nodes, back up existing configuration
+
+---
+- name: Configure IOS, Junos,and EOS plaftorms
+  hosts: ios, junos, eos
+  gahter_facts: false
+  vars:
+    ansible_connection: ansible.netcommon.network_cli
+  tasks:
+    - name: Configure NTP settings
+      ansible.netcommon.cli_config:
+        config: "{{ config_ntp }}"
+      notify:
+        - Save configuration
+  handlers:
+    - name: Respond to notification
+      ansible.netcommon.cli_command:
+        command: "{{ save_config }}"
+      listen: Save configuration
+
+
+$ cat config_ntp
+---
+config_ntp: |
+  ntp server 10.10.10.10 prefer
+  ntp server 10.10.10.11
+save_config: "copy running-config startup-config"
+
+$ cat save_config
+---
+config_ntp: |
+  set system ntp server 10.10.10.10 prefer
+  set system ntp server 10.10.10.11
+save_config: "commit"
+
+
+-> ansible.netcommon.cli_config can also back up confiugration across network plaftorms
+
+---
+- name: Backup configuration on IOS, Junos and EOS
+  hosts: ios, junos, eos
+  gather_facts: false
+  tasks:
+    - name: backup configuration
+      vars:
+        ansible_connection: ansible.netcommon.network_cli
+      ansible.netcommon.cli_config:
+        backup: true
+        backup_options:
+          filename: "{{ inventory_hostname }}.cfg"
+          dir_path: ./backup
+
+7.2.7 Parsing Configuration and Operational State Data
+
+- Parsing is the process of converting unstructures or semistructures text into sttuctured data.
+
+- 'ansible.utils.cli_parse' module to parse data
+
+7.2.8 Parsing Configuration Data
+
+- Network configurations are stored in different formats on different network platforms. You might want to store configurations from multiple network platforms in a vendor-neutral format for configuration management, migration, or troubleshooting purposes.
+
+- use 'parsed' resource module to parse and reformat sections of configuration data
+
+---
+- name: Parse L3 interface configuration and save the data to a file
+  hosts: ios1.example.com
+  gather_facts: false
+  tasks:
+    - name: Parse L3 interface configuration
+      cisco.ios.ios_l3)interfaces:
+        running_config: "{{ lookup('ansible.builtin.file', 'l3int.cfg') }}"
+        state: parsed
+      register: ios_l3int
+
+    - name: Save configuration data
+      ansible.builtin.copy:
+        content: >-
+          "{{ ios_l3int | ansible.builtin.to_nice_yaml }}"
+        dest: parsed_l3int.cfg
+      delegate_to: localhost
+
+7.2.9 Parsing Operational State Data
+
+- use 'ansible.utils.cli_parse' module to parse data for the following reasons:
+
+1. network resource module does not exist for the particular network platform and resource
+
+2. fact modules do not return the data that you want
+
+3. convert configuration files into structured data and then send it to an external system, such as an IP address management (IPAM) or network management system
+
+4. parse operational state data, such as the output of show commands, and there is no module available to get the data you require
+
+- 'ansible.utils.cli_parse' module uses an architecture based on plug-ins and supports several different plug-ins. The ansible.netcommon.native plug-in is covered in this section.
+
+- To use 'ansible.netcommon.native' plug-in you must create a template. The plug-in takes the output of a network device command and applies a YAML template to transform the command output into structured data.
+
+- YAML template file uses regular expressions to parse the recevied data into strcutured data
+
+- The YAML template is structured as a list of parsers
+
+key:       description:
+- example: An example line of the text line to be parsed.
+- getval:  A regular expression using named capture groups to store the extracted data.
+- result:  A data tree, populated as a template, from the parsed data.
+- shared:  The shared key makes the parsed values available to the rest of the parser entries until matched again.
+
+EX:  runs the show ip interface command on IOS managed nodes
+
+---
+- name: Run a command and parse the output
+  hosts: ios
+  gather_facts: false
+  tasks:
+    - name: Parse interface data
+      ansible.utils.cli_parse:
+        command: "show ip interface"
+        parser:
+          name: ansible.netcommon.native
+          template_path: "./templates/interfaces.yml"
+        set_fact: ios_interfaces
+
+    - name: Disaply structured data
+      ansible.builtin.debug:
+        var: ansible_facts['ios_interfaces']
+
+
+! Important
+
+- Set the path to the template file with the template_path parameter
+- If you do not set the template path, then the default path for a parser template is templates/{{ short_os }}_{{ command }}.{{ extension }}.
+- short_os is derived from the ansible_network_os variable and set to lowercase.
+- command is the command passed to the module with spaces replaced with underscore (_) characters.
+- extension is specific to the parser used (native=yaml, textfsm=textfsm, ttp=ttp).
+
+EX: The associated YAML template consists of the following content:
+
+---
+- example: "GigabitEthernet1 is up, line protocol is up"
+  getval: '(?P<name>\S+)\sis\s(?P<admin_state>\S+)\,\sline\sprotocol\sis\s(?P<oper_state>\S+)'
+  result:
+    "{{ name }}":
+      name: "{{ name }}"
+      state:
+        admin: "{{ admin_state }}"
+        operating: "{{ oper_state }}"
+
+
+7.2.10 Using Ansible Validated Content
+
+- Ansible validated content is a set of Ansible Content Collections that are focused on specific use cases.
+
+- The network.base Ansible Content Collection is Ansible validated content focusing on platform-independent network automation, and provides core functionality for other network-oriented Ansible Content Collections that are Ansible validated content, such as the network.ospf, network.interfaces, and network.bgp collections.
+
+- The persist action gets the facts for a given resource and stores the facts as inventory host variables.
+
+- The list action displays the list of all resource modules supported for a given network OS.
+
+- The gather action gathers and displays the facts for specified network resources.
+
+- The deploy action deploys changes, based on host variables, to the device.
+
+- The configure action provides another way of pushing configuration changes to the device.
+
+7.3.0 Performing Rolling Configuration Updates
+
+7.3.1 Configuring Parallelism in Ansible by Using Forks
+
+$ cat ansible.cfg
+[defaults]
+forks=5
+
+7.3.2 Controlling Batch Size
+
+---
+- name: Update Cisco IOS
+  hosts: ios
+  serial:
+    - 1%
+    - 10%
+    - 100%
+
+
+7.3.3 Specifying Failure Tolerance
+
+- max_fail_percentage: 0
+
+---
+- name: Update Cisco IOS
+  hosts: ios
+  max_fail_percentage: 30%
+  serial:
+    - 2
+    - 10%
+    - 100%
+  tasks:
+    - name: Step One
+      cisco.ios.ios_command:
+        command: SOME COMMAND
+
+    - name: Step Two
+      cisco.ios.ios_config:
+        src: "{{ inventory_hostname }}.cfg"
+
+7.3.4 Running a Task One Time
+
+- run_once: true
+
+- name: Pause 30 seconds
+  ansible.builtin.pause:
+    seconds: 30
+  run_once: true
+
+-> Run a task once for the entire play 
+
+- name: Pause 30 seconds
+  when: inventory_hostname == ansible_play_hosts[0]
+  ansible.builtin.pause:
+    seconds: 30
+  run_once: true
