@@ -581,6 +581,15 @@ $ ansible-navigator inventory -i invenotry --list --yaml > inventory.yml
 {{ hostvars[server]['ansible_facts']['hostname'] }} {{ hostvars[server]['ansible_facts']['default_ipv4']['address'] }}
 {% endfor %}
 
+$ cat host_vars/arista2.lab.example.com/interfaces.yml
+---
+interfaces:
+  - name: Loopback100
+    address: 10.10.10.102/32
+  - name: Loopback101
+    address: 10.10.10.103/32
+
+
 {# loop through each interface #}
 {% for interface in interfaces %}
 interface {{ INTEFACE['name'] }}
@@ -588,54 +597,160 @@ interface {{ INTEFACE['name'] }}
   ip address {{ INTERFACE['address'] }}
 {% endfor %}
 
+$ cat group_vars/all/acls.yml
+---
+acls:
+  - id: 10
+    host: 172.25.251.20
+  - id: 20
+    host: 172.25.251.21
+  - id: 30
+    host: 172.25.251.22
+  - id: 40
+    host: 172.25.251.23
+
+{# loop through each acl list #}
+{% for ACL in acls %}
+  {{ ACL['id'] }} permit ip host {{ ACL['host'] }} any log
+{% endfor %}
+
+------------------------------- Jinja2 configuration file
+$ cat templates/eos_config.j2
+
+! Command: show running-config
+! device: {{ hostname }} (vEOS-lab, EOS-4.30.1F)
+!
+hostname {{ hostname }}
+!
+{# loop through each interface #}
+{% for INTERFACES in interfaces %}
+interface {{ INTERFACE['interface'] }}
+  description {{ INTERFACE['description'] }}
+  ip address {{ INTERFACE['address'] }}
+{% endfor %}
+
+ip access-list templates-project
+
+{# loop throug each access list #}
+{% for ACL in acls %}
+  {{ ACL['id'] }} permit ip host {{ ACL['host'] }} any log
+{% endfor %}
+
+
+---------------------- The original config file:
+
+$ cat eos_config.cfg 
+
+! Command: show running-config
+! device: arista-host01 (vEOS-lab, EOS-4.30.1F)
+!
+hostname arista-host01
+!
+interface Loopback100
+   description Loopback100 Interface
+   ip address 10.0.30.2/32
+!
+interface Loopback101
+   description Loopback101 Interface
+   ip address 10.0.31.2/32
+!
+ip access-list test
+   10 permit ip host 172.25.202.7 any log
+   20 permit ip host 172.25.210.7 any log
+!
+
+5.1 Generate a Jinja2 tempalte playbook backup
+
+---
+- name: Gahter minimal facts
+  hosts:
+    - eos
+    - ios
+  gather_facts: false
+  tasks: []
+
+- name: Generate configuration files from templates
+  hosts: workstation.lab.example.com
+  become: true
+  become_user: student
+  gather_facts: false
+  vars:
+    config_dir: "{{ playbook_dir }}/configs"
+  tasks:
+    - name: Create the directory
+      ansible.builtin.file:
+        path: "{{ config_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: 0750
+
+    - name: Generate Arista configuration file 
+      vars:
+        hostname: "{{ hostvars[item]['ansible_facts']['net_hostname'] }}
+        interfaces: "{{ hostvars[item]['interfaces'] }}"
+        acls: "{{ hostvars[item]['acls'] }}"
+      ansible.builtin.template:
+        src: templates/eos_config.j2
+        dest: "{{ config_dir }}/{{ item }}.cfg"
+      loop: "{{ groups['eos'] }}"
+
+    - name: Generate Cisco configuration files
+      vars:
+        hostname: "{{ hostvars[item]['ansible_facts']['net_hostname'] }}"
+        interfaces: "{{ hostvars[item]['interfaces'] }}"
+        acls: "{{ hostvars['acls'] }}"
+      ansible.builtin.template:
+        src: templates/ios_config.j2
+        dest: "{{ config_dir }}/{{ item }}.cfg"
+      loop: "{{ groups['ios'] }}"
+
+- name: Deploy Configuration file
+  hosts:
+    - eos
+    - ios
+  gather_facts: false
+  tasks:
+    - name: Deploy arista configuration file
+      when: ansible_network_os == "arists.eos.eos"
+      arista.eos.eos_config:
+        src: configs/{{ inventory_hostname }}.cfg
+
+    - name: Deploy ios configuration file
+      when: ansible_network_os == "cisco.ios.ios"
+      cisco.ios.ios_config:
+        src: configs/{{ inventory_hostname }}.cfg
+
+
+5.2 Configure ACL
 
 
 
+---
+- name: Juniper Junos ACL configuration
+  junipernetworks.junos.junos_acls:
+    state: merged
+    config:
+      - acls:
+          - name: junos_acl
+            aces:
+              - name: permit_igmp
+                grant: permit
+                protocol: igmp
+                source:
+                  address: 172.25.250.100/32
 
+              - name: bgp_12
+                source:
+                  address:
+                    - 12.0.0.0/16
+                    - 12.1.0.0/16
+                  port_protocol:
+                    eq: bgp
+                protocol: tcp
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+              - name: allow_ssh
+                source:
+                  port_protocol:
+                    eq: ssh
+                protocol: tcp
